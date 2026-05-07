@@ -59,25 +59,50 @@ export default {
         });
       }
 
-      // === Отправка сообщения: POST / (JSON) ===
+      // === Отправка сообщения: POST / ===
       if (request.method === "POST") {
         const body = await request.json();
-        const { type = "info", text = "", token, chat_ids } = body;
+        const { type = "info", text = "", token, chat_ids, msg = "" } = body;
 
-        if (!text) return new Response("Missing 'text' field", { status: 400 });
-
+        //── VBA: есть token + chat_ids ──────────────────────────
         if (token && chat_ids) {
+          const finalText = text || msg || "Уведомление";
           const ids = Array.isArray(chat_ids) ? chat_ids : String(chat_ids).split(",").map(s => s.trim());
           for (const chatId of ids) {
             await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown", disable_web_page_preview: true })
+              body: JSON.stringify({ chat_id: chatId, text: finalText, parse_mode: "Markdown", disable_web_page_preview: true })
             });
           }
           return new Response("OK");
         }
 
+        //── Uptime Kuma webhook ─────────────────────────────────
+        if (body.monitor || body.heartbeat) {
+          const status = body.monitor?.status ?? body.heartbeat?.status;
+          const monitorName = body.monitor?.name || "Неизвестный монитор";
+          const monitorUrl = body.monitor?.url || body.heartbeat?.monitorURL || "";
+          const kumaMsg = body.msg || body.message || "";
+
+          let emoji = "⚠️";
+          if (status === 1 || status === "up") emoji = "✅";
+          if (status === 0 || status === "down") emoji = "❌";
+
+          let telegramMessage = `${emoji} *${monitorName}*\n\n`;
+          if (kumaMsg) telegramMessage += `${kumaMsg}\n\n`;
+          if (monitorUrl) telegramMessage += `URL: ${monitorUrl}\n`;
+          if (body.heartbeat?.time) telegramMessage += `Время: ${body.heartbeat.time}\n`;
+          if (body.heartbeat?.ping !== undefined) telegramMessage += `Ping: ${body.heartbeat.ping}ms\n`;
+
+          await sendTelegram(env, telegramMessage);
+          return new Response(JSON.stringify({ success: true }), {
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+
+        //── Общее уведомление (включая тест от Uptime Kuma) ────
+        const finalText = text || msg || "Тестовое уведомление";
         let emoji = "ℹ️";
         switch (type.toLowerCase()) {
           case "critical": emoji = "🔴"; break;
@@ -86,7 +111,7 @@ export default {
           case "info":     emoji = "ℹ️"; break;
           case "debug":    emoji = "🔍"; break;
         }
-        await sendTelegram(env, `${emoji} *${type.toUpperCase()}*\n\n${text}`);
+        await sendTelegram(env, `${emoji} *${type.toUpperCase()}*\n\n${finalText}`);
         return new Response("OK");
       }
 
@@ -161,7 +186,7 @@ export default {
       return new Response("OK");
     } catch (error) {
       try {
-        await sendTelegram(env, `⚠️ *Ошибка обработки лога MikroTik*\n\n\`\`\`\n${error.message}\n\`\`\``);
+        await sendTelegram(env, `⚠️ *Ошибка обработки лога*\n\n\`\`\`\n${error.message}\n\`\`\``);
       } catch (e) {}
       return new Response("Error occurred, but accepted");
     }
